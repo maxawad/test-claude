@@ -1,50 +1,59 @@
-# Mira — Claude Code channel
+# Mira Claude Code channel (test-claude)
 
-A Claude Code channel plugin that bridges chat from the Mira iOS app into a local Claude Code session.
+Mira is a plugin for Claude Code that lets you talk to a coding assistant from your phone. Messages typed or spoken in the Mira iOS app (a smart glasses companion app) arrive in a Claude Code session running on your computer, and Claude's short spoken-style answer is sent back to the phone.
 
-When the iOS app's "Claude Code" toggle is ON, every message the user sends from the app POSTs to `http://127.0.0.1:3141/api/chat` on your laptop. This plugin runs as an MCP channel inside Claude Code, receives the POST, pushes the message into the active Claude Code session as a `<channel source="mira" chat_id="...">` tag, and waits. When Claude finishes responding, the plugin's `Stop` hook forwards `last_assistant_message` back to the waiting iOS request.
+This repository is a test and development copy of that plugin, used to try out Claude Code channels, hooks, a plugin marketplace and plugin auto-update.
 
-## Install
+## What it does
 
-This is a development-stage channel, so it isn't on Anthropic's approved allowlist. You'll start Claude Code with `--dangerously-load-development-channels` to load it.
+- Runs as an MCP "channel" server inside Claude Code (`plugins/mira/server.ts`) and listens for chat requests on `127.0.0.1:3141`.
+- Pushes each incoming chat message into the active Claude Code session as a `<channel source="mira">` tag, along with optional context such as the user's first name, local time and location.
+- Uses Claude Code hooks (`plugins/mira/hooks/`) to send the final answer, and live "tool is running" status updates, back to the waiting app request as a server-sent event stream.
+- Opens a Cloudflare tunnel so the phone can reach your computer from anywhere. The tunnel is provisioned by a Mira staging backend, so this part only works for people with access to that backend.
+- Checks this GitHub repository for a newer plugin version and tries to update itself.
+- Includes a default agent, also called Mira, with a short and dry spoken style (`plugins/mira/agents/mira.md`).
 
-1. Add the marketplace, then install the plugin:
+## Tech stack
+
+- TypeScript running on Bun
+- Model Context Protocol SDK (`@modelcontextprotocol/sdk`), `zod`, `localtunnel`
+- Claude Code plugin, marketplace and hooks system
+- Cloudflare tunnels (`cloudflared`, downloaded on first run)
+
+## Status
+
+Prototype. The local bridge can be tried without the iOS app, using curl (see below). The tunnel and the iOS connection need the private Mira backend and app, so they are not usable by outside visitors. The three large Markdown files at the top level (`channels.md`, `hooksinfo.md`, `plugininfo.md`) are copies of Claude Code documentation kept as reference notes. They belong to Anthropic and are not part of the plugin.
+
+## Run it
+
+Requirements: [Claude Code](https://code.claude.com) v2.1.80 or later and [Bun](https://bun.sh). Dependencies are installed by Claude Code and Bun, you do not run the server yourself. If you want to install them by hand, run `bun install` inside `plugins/mira`.
+
+1. Start Claude Code and add this repository as a marketplace, then install the plugin:
 
    ```sh
    claude
    # inside the Claude Code session:
-   /plugin marketplace add big-halo/mira-claude-channel
+   /plugin marketplace add maxawad/test-claude
    /plugin install mira@mira-marketplace
    ```
 
-   Optional, but recommended: enable plugin auto-updates for this marketplace.
-   Third-party marketplaces are not auto-updated by default.
+   Optional: enable auto-update with `/plugin` then Marketplaces, then `mira-marketplace`, then Enable auto-update. The marketplace does not set an explicit plugin version, so Claude Code uses the git commit to detect updates. After an update, run `/reload-plugins` or restart the session.
 
-   ```text
-   /plugin → Marketplaces → mira-marketplace → Enable auto-update
-   ```
-
-   This marketplace intentionally does not set an explicit plugin `version`, so
-   Claude Code uses the plugin source's git commit SHA for update detection.
-   When the `main` branch changes, the next marketplace auto-update can install
-   the new plugin cache. If Claude Code reports that a plugin updated, run
-   `/reload-plugins` or restart the session.
-
-2. Quit, then relaunch Claude Code with the development-channels flag:
+2. Quit, then relaunch Claude Code with the development channels flag. This plugin is not on Anthropic's approved channel list, so the flag is required:
 
    ```sh
    claude --dangerously-load-development-channels plugin:mira@mira-marketplace
    ```
 
-   Confirm the prompt. Claude Code will spawn `server.ts` over stdio and the HTTP listener will start on `127.0.0.1:3141` automatically. You don't run `bun` yourself.
+   Confirm the prompt. Claude Code starts `server.ts` over stdio and the HTTP listener starts on `127.0.0.1:3141`.
 
-3. In the iOS app, open Settings → Claude Code → toggle **Local Integration** ON.
+3. In the Mira iOS app, open Settings, then Claude Code, and turn Local Integration on. This step needs the Mira app.
 
-4. Send a message from the app. It will appear in your Claude Code session as a `<channel>` tag. Claude responds normally, and the `Stop` hook sends the final assistant message back to the app.
+4. Send a message from the app. It appears in your Claude Code session, and the answer goes back to the app.
 
-## Test from curl (no iOS app needed)
+### Try it with curl (no iOS app needed)
 
-With Claude Code running per step 2 above, in another terminal:
+With Claude Code running as in step 2, in another terminal:
 
 ```sh
 curl -X POST http://127.0.0.1:3141/api/chat \
@@ -52,14 +61,35 @@ curl -X POST http://127.0.0.1:3141/api/chat \
   -d '{"messages":[{"speaker":0,"content":"hello from curl"}],"user_local_time":"now","user_timezone":"UTC","location":null}'
 ```
 
-The request opens an SSE response until Claude's `Stop` hook forwards the final assistant message (timeout 120s). The stream emits `{"text": "..."}`, `{"sources": []}`, then `[DONE]`, matching the format the iOS app expects.
+The request stays open as a server-sent event stream until Claude finishes, with a 120 second timeout. The stream sends `{"text": "..."}`, then `{"sources": []}`, then `[DONE]`.
 
-## Structure
+### Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MIRA_PORT` | `3141` | Port of the local listener |
+| `MIRA_HOST` | `127.0.0.1` | Address the listener binds to. Keep it on loopback unless you know why you need otherwise. |
+| `MIRA_LOG` | `/tmp/mira.log` | Log file path |
+| `MIRA_SSE_HEARTBEAT_MS` | `15000` | Keep-alive interval for the event stream |
+| `CLAUDE_BIN` | `~/.local/bin/claude` | Claude Code binary used by the auto-update step |
+
+No API keys are needed to run the local bridge. See `.env.example` for the variable names.
+
+## Project layout
 
 ```
-.claude-plugin/marketplace.json          # marketplace catalog
+.claude-plugin/marketplace.json          marketplace catalog
 plugins/mira/
-  .claude-plugin/plugin.json             # plugin manifest, declares mcpServers
-  server.ts                              # MCP channel + Bun HTTP listener
-  package.json                           # @modelcontextprotocol/sdk
+  .claude-plugin/plugin.json             plugin manifest, declares the MCP server
+  server.ts                              MCP channel and Bun HTTP listener
+  cloudflare.ts                          tunnel provisioning and cloudflared process
+  device.ts                              per-machine device id
+  plugin_update.ts                       update check against this repository
+  hooks/                                 SessionStart, PreToolUse, PostToolUse and Stop hooks
+  agents/mira.md                         default Mira agent prompt
+channels.md, hooksinfo.md, plugininfo.md reference copies of Claude Code docs
 ```
+
+## Credits
+
+Built on Claude Code's channels, hooks and plugin features from Anthropic. The Mira iOS app and its backend belong to the Mira team.

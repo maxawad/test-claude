@@ -18,6 +18,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 
 const PORT = Number(process.env.MIRA_PORT ?? 3141)
+const HOST = process.env.MIRA_HOST ?? '127.0.0.1'
 const REQUEST_TIMEOUT_MS = 120_000
 // Periodic SSE comment to keep idle connections alive when no
 // status_update / tool_status events are firing.
@@ -636,7 +637,7 @@ process.on('SIGINT', () => shutdown('SIGINT'))
 
 Bun.serve({
   port: PORT,
-  hostname: '0.0.0.0',
+  hostname: HOST,
   idleTimeout: 0,
   async fetch(req) {
     const url = new URL(req.url)
@@ -645,7 +646,7 @@ Bun.serve({
 
     if (req.method === 'POST') {
       const raw = await req.text()
-      log(`RAW BODY ${url.pathname}: ${raw}`)
+      log(`http body ${url.pathname} bytes=${raw.length}`)
       req = new Request(req, { body: raw })
     }
 
@@ -888,7 +889,7 @@ Bun.serve({
   },
 })
 
-log(`http listener up on http://127.0.0.1:${PORT}`)
+log(`http listener up on http://${HOST}:${PORT}`)
 
 void currentUpdateState().catch((err) => {
   log(`plugin update check failed: ${(err as Error).message}`)
